@@ -21,7 +21,6 @@ idea, not our exact implementation.
 9. [Fitting it into one CPU core and 60 minutes](#9-fitting-it-into-one-cpu-core-and-60-minutes)
 10. [What did not work](#10-what-did-not-work)
 11. [After the deadline: why new models kept "fading"](#11-after-the-deadline-why-new-models-kept-fading)
-12. [Lessons](#12-lessons)
 
 ---
 
@@ -411,17 +410,6 @@ def committee(sources, y, unit, fold):
                 out[te, k] = np.c_[[s[te, k] for s in sources].T, np.ones(te.sum())] @ b
     return out
 ```
-
-## 12. Lessons
-
-1. **Decode the data before modelling.** The target rule, the price codebook and the depth decoder made the mirror
-   augmentation possible and killed a dozen dead-end ideas early.
-2. **Split by session, fit teachers on train only, compare against matched controls.** Our worst estimates came from leaks
-   we did not see.
-3. **Judge per unit, never only pooled.** A pooled score hid opposite trends for a month.
-4. **Adapt to the most recent period.** Joint training and validation fine-tunes were our largest public gains.
-5. **Diversity of pipelines beats diversity of architectures**, and seeds of one recipe add little (0.997 correlated).
-6. **Engineering is modelling here.** Every 10 % of inference speed bought another member.
 
 ---
 

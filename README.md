@@ -1,7 +1,7 @@
 # Wunder Fund Alfa Connectome: our solution
 
 **Team:** Ayush Gupta ([@ayushcoder894](https://github.com/ayushcoder894)), TODO_NAME_2 (@TODO), TODO_NAME_3 (@TODO)
-**Result:** public leaderboard 0.66938 (about rank 45 of 5,800). Our rule-clean variant scored 0.66924.
+**Result:** public leaderboard 0.66938, public rank 49. Our rule-clean variant scored 0.66924. Final (private) rank: to be added.
 **Competition:** streaming prediction of two price-movement indicators from order books of two instruments, scored by a
 global weighted Pearson correlation; inference on 1 CPU core in 60 minutes for 39.4 million rows.
 

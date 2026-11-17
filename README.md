@@ -11,6 +11,7 @@ idea, not our exact implementation.
 ## Contents
 
 1. [The task in one paragraph](#1-the-task-in-one-paragraph)
+   - [Pipeline at a glance](#pipeline-at-a-glance)
 2. [What the data turned out to be](#2-what-the-data-turned-out-to-be)
 3. [Validation: the part we got wrong first](#3-validation-the-part-we-got-wrong-first)
 4. [The base model](#4-the-base-model)
@@ -33,6 +34,74 @@ Each sequence is 20,000 consecutive moments of two instruments, `i0` and `i1`: 1
 correlation of prediction and target per target (weights = |target|, both clipped to [-2, 2]), pooled over all scored rows of
 all sequences, averaged over the two targets. Train: 10,607 sequences; validation: 1,873 with the scored mask; test: 1,970,
 streamed row by row to the submission. State must be reset between sequences.
+
+## Pipeline at a glance
+
+```mermaid
+flowchart TD
+    subgraph DATA["1 · Understand the data"]
+        A1["Raw rows: 112 quantile-transformed columns<br/>two instruments, 20,000-row sequences"]
+        A2["Decode: price codebook, tick path,<br/>10-level depth per side, clock columns"]
+        A3["Target rule: F = end of next full-tick run<br/>t0 = F − ask, t1 = bid − F"]
+        A4["Tick unit 0-3 from 99 warm-up rows<br/>(99.95 %)"]
+        A5["Sessions: link blocks into trading sessions"]
+        A1 --> A2 --> A3
+        A1 --> A4
+        A2 --> A5
+    end
+
+    subgraph VAL["2 · Honest validation"]
+        V1["Folds by session, never random or by chain"]
+        V2["Teachers for gates fitted on train only"]
+        V3["Matched control, paired session bootstrap,<br/>per-unit scores"]
+        V1 --> V2 --> V3
+    end
+
+    subgraph LABELS["3 · Better labels"]
+        L1["Causal teacher ensemble"]
+        L2["Look-ahead teachers<br/>(see next 20 / 50 rows)"]
+        L3["Big LSTM teachers 16M + 33M<br/>(too slow to ship)"]
+        L4["Soft label = 0.2 · y + 0.8 · teacher"]
+        L1 --> L4
+        L2 --> L4
+        L3 --> L4
+    end
+
+    subgraph MODEL["4 · Base model (joint train + validation)"]
+        M1["Per-column PLE + causal adaptive normalisation"]
+        M2["Two LSTM streams (i0, i1) → top LSTM"]
+        M3["Loss: 1 − weighted Pearson, P(scored) row weights,<br/>+ MSE, distillation, aux heads"]
+        M4["Random weight perturbation · EMA · 5 epochs"]
+        M1 --> M2 --> M3 --> M4
+    end
+
+    subgraph ADAPT["5 · Adapt to the latest period"]
+        F1["Fine-tune on validation per unit group<br/>(warm-up + cosine, soft labels)"]
+        F2["Unit 3: exact bid/ask mirror copies<br/>via the depth decoder"]
+        F3["Soup of 3-6 seeds of one parent<br/>0.75 · soup + 0.25 · parent"]
+        F1 --> F3
+        F2 --> F3
+    end
+
+    subgraph INFER["6 · Inference (1 CPU core, 60 min)"]
+        I1["Warm-up rows → unit detector"]
+        I2["Units 0-2: G0 + RGRU + tsall blend"]
+        I3["Unit 3: three mirror-trained members, equal weights"]
+        I4["C kernel: int8 / fp16 weights,<br/>shared input work, timing watchdog"]
+        I5["Predictions t0, t1 on every row"]
+        I1 --> I2 --> I4
+        I1 --> I3 --> I4
+        I4 --> I5
+    end
+
+    DATA --> VAL
+    DATA --> LABELS
+    VAL --> MODEL
+    LABELS --> MODEL
+    MODEL --> ADAPT
+    LABELS --> ADAPT
+    ADAPT --> INFER
+```
 
 ## 2. What the data turned out to be
 

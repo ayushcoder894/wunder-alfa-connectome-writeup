@@ -19,10 +19,9 @@ idea, not our exact implementation.
 7. [Unit 3: the hard market](#7-unit-3-the-hard-market)
 8. [The final ensemble](#8-the-final-ensemble)
 9. [Fitting it into one CPU core and 60 minutes](#9-fitting-it-into-one-cpu-core-and-60-minutes)
-10. [Leaderboard history](#10-leaderboard-history)
-11. [What did not work](#11-what-did-not-work)
-12. [After the deadline: why new models kept "fading"](#12-after-the-deadline-why-new-models-kept-fading)
-13. [Lessons](#13-lessons)
+10. [What did not work](#10-what-did-not-work)
+11. [After the deadline: why new models kept "fading"](#11-after-the-deadline-why-new-models-kept-fading)
+12. [Lessons](#12-lessons)
 
 ---
 
@@ -361,27 +360,13 @@ __m256i s   = _mm256_madd_epi16(p, ones16);              /* widen to int32      
   timing guard was too tight on a noisy host; after that we always kept a 15 % margin and timed packages in Docker with
   one pinned core (the scorer ran about 1.4x slower than Docker).
 
-## 10. Leaderboard history
-
-| Date | Public | Step |
-|---|---|---|
-| Oct 30 | 0.6550 | single distilled GRU, fp32 |
-| Nov 1 | 0.6616 | joint train + validation pair of LSTMs, fp16 kernel |
-| Nov 4 | 0.6637 | LSTM-192 + level Bi-GRU, int8 kernel |
-| Nov 6 | 0.6661 | two-stream on unit 3, validation fine-tune on units 0-2 |
-| Nov 7 | 0.6678 | big-teacher labels in the fine-tune, unit-3 soft-label fine-tune |
-| Nov 10 | 0.6680 | faster kernel, unit-3 member refit |
-| Nov 11 | 0.6689 | mirror inside the unit-3 fine-tune, validation-fine-tuned units 0-2 member |
-| Nov 13 | 0.66905 | depth-decoder mirror member |
-| Nov 14 | 0.66938 | three unit-3 members, mirror-pretrained parent |
-
-## 11. What did not work
+## 10. What did not work
 
 Each of these was tested against a matched control, most on the full recipe:
 
 - **Architectures:** local attention, TCN, LRU / diagonal state-space, minGRU / minLSTM stacks, sLSTM, LayerNorm-LSTM,
   CNNs on the book "image", event-clocked layers, memory cores, multi-head averaging, per-unit specialists. Every one led at
-  epoch 0 and faded to a seed or worse by epochs 2-4 (see section 12 for why).
+  epoch 0 and faded to a seed or worse by epochs 2-4 (see section 11 for why).
 - **Online learning,** in every form we could make legal: per-sequence recalibration from labels that become known later
   (once a label is causally known it carries nothing), weights carried across sequences (harmful at every learning rate).
 - **Features:** order-flow, decoded book levels as inputs, Markov / n-gram event grammars, partner lead-lag, regime
@@ -392,7 +377,7 @@ Each of these was tested against a matched control, most on the full recipe:
 - **Data:** re-weighting train sequences toward the validation regime (unit-3 train is 64 % "trending" sessions, validation
   96 % "bounce"), adding other units' data to unit 3, time-warp augmentation, target clipping.
 
-## 12. After the deadline: why new models kept "fading"
+## 11. After the deadline: why new models kept "fading"
 
 Looking per unit instead of pooled explained the pattern:
 
@@ -427,7 +412,7 @@ def committee(sources, y, unit, fold):
     return out
 ```
 
-## 13. Lessons
+## 12. Lessons
 
 1. **Decode the data before modelling.** The target rule, the price codebook and the depth decoder made the mirror
    augmentation possible and killed a dozen dead-end ideas early.

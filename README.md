@@ -21,6 +21,12 @@ idea, not our exact implementation.
 9. [Fitting it into one CPU core and 60 minutes](#9-fitting-it-into-one-cpu-core-and-60-minutes)
 10. [What did not work](#10-what-did-not-work)
 11. [After the deadline: why new models kept "fading"](#11-after-the-deadline-why-new-models-kept-fading)
+12. [The second pipeline: GRU students and teacher labels](#12-the-second-pipeline-gru-students-and-teacher-labels)
+13. [Measuring small gains: the bench audit and transfer](#13-measuring-small-gains-the-bench-audit-and-transfer)
+14. [Where the limit is](#14-where-the-limit-is)
+15. [Why most attempts failed: seven causes](#15-why-most-attempts-failed-seven-causes)
+16. [Final selection and where the score came from](#16-final-selection-and-where-the-score-came-from)
+17. [References](#references)
 
 ---
 
@@ -210,17 +216,17 @@ def paired_boot(pa, pb, y, sess, n=300, rng=np.random.default_rng(0)):
 
 ## 4. The base model
 
-All shipped members are small recurrent networks trained on full 20,000-row sequences with truncated BPTT in 1,000-row
+All shipped members are small recurrent networks trained on full 20,000-row sequences with truncated BPTT [1] in 1,000-row
 chunks. The ingredients that survived paired tests, in the order we found them (validation gains, one seed unless noted):
 
 | Change | Gain | Note |
 |---|---|---|
-| LSTM instead of GRU at equal cost | +0.002 | 128 → 192 wide paid only once labels were cleaner |
+| LSTM [2] instead of GRU [3] at equal cost | +0.002 | 128 → 192 wide paid only once labels were cleaner |
 | Self-supervised auxiliary heads (future decoded price moves at 5-200 rows) | +0.001 | training only |
-| Random weight perturbation (N(0, (0.01·|w|)²) on alternate steps) | +0.0005 | SAM and heavier noise did not help |
-| Piecewise-linear encoding (PLE) of each input, 8 bins | +0.0008 | factored, zero-initialised |
+| Random weight perturbation (N(0, (0.01·|w|)²) on alternate steps) | +0.0005 | SAM [4] and heavier noise did not help |
+| Piecewise-linear encoding (PLE) [5] of each input, 8 bins | +0.0008 | factored, zero-initialised |
 | Causal adaptive input normalisation (`ain`) | +0.0007 | 672 parameters, proven on 2 seeds |
-| LSTM with projection (400 cells → 128) | +0.0007 | |
+| LSTM with projection [6] (400 cells → 128) | +0.0007 | |
 | Two streams: one per instrument, merged at the top | +0.0004 pooled, **+0.0019 unit 3** | used for unit 3 |
 
 ### 4.1 Loss
@@ -241,7 +247,7 @@ loss = sum(1 - wcorr(out[:, k], y[:, k], rw) for k in range(2)) / 2 \
 
 ### 4.2 Piecewise-linear encoding, factored
 
-PLE (Gorishniy et al., 2022) turns each scalar into a vector of "how far through each quantile bin". With 224 inputs
+PLE (Gorishniy et al., 2022) [5] turns each scalar into a vector of "how far through each quantile bin". With 224 inputs
 (values and first differences) × 8 bins the encoding is wide, so we project it to 64 extra LSTM inputs with a zero-initialised
 matrix. At export the projection is folded into the LSTM's input weights per code, so inference only adds the rows of
 bins that changed.
@@ -260,7 +266,7 @@ class PLE(nn.Module):
 
 ### 4.3 Causal adaptive input normalisation
 
-Train and validation differ strongly (a classifier separates them at AUC 0.99). `ain` normalises every column by running
+Train and validation differ strongly (a classifier separates them at AUC 0.99). `ain` (related to DAIN [7], but causal) normalises every column by running
 statistics of the sequence itself, mixed with the global normalisation by a few learned scalars per column. It is causal (only
 past rows) and cheap enough to share between all models at inference.
 
@@ -290,11 +296,11 @@ representation, and on unit 3 that was worth +0.0019.
 
 ## 5. Labels: teachers and look-ahead targets
 
-Raw targets are noisy (a target is constant between price events and then jumps). Distillation gave clean, repeatable gains:
+Raw targets are noisy (a target is constant between price events and then jumps). Distillation [8] gave clean, repeatable gains:
 
 - **Causal teacher ensemble** (`teachmix`, 9 models averaged): the student pulls its main head toward the teacher with the
   same weighted Pearson.
-- **Look-ahead teachers:** the same LSTM, but given summaries of the next 20 or 50 rows of the decoded price path. They score
+- **Look-ahead teachers** (privileged information used only in training [9]): the same LSTM, but given summaries of the next 20 or 50 rows of the decoded price path. They score
   0.742 / 0.800 on validation (causal models: 0.69). Labels from 20-50 rows of look-ahead helped; 100-500 rows or event-time
   look-ahead hurt (the teacher sees too much the student cannot know).
 - **A big teacher:** two wide LSTMs (16M and 33M parameters, 6-14 hours of CPU each, unshippable) averaged as `xlmix`
@@ -310,10 +316,10 @@ train. So the validation period is the most test-like data we have.
 1. **Joint training.** Every shipped parent is trained on train + validation. Train-only models transferred to public
    about 0.002-0.003 worse than their joint twins.
 2. **Validation fine-tunes per unit.** Parents are fine-tuned on validation sequences of one unit group, with warm-up +
-   cosine LR (peak 2e-4, 6 epochs), loss weight 0.1 on unscored rows, and soft labels. A constant LR collapsed the models
+   cosine LR [10] (peak 2e-4, 6 epochs), loss weight 0.1 on unscored rows, and soft labels. A constant LR collapsed the models
    (−0.04): they had ended pre-training at ~1e-6.
-3. **Weight soups.** Three to six fine-tunes of the same parent, differing only by seed, are averaged in weight space,
-   then mixed 0.75 / 0.25 with the parent (a WiSE-FT-style hedge). Independent-seed soups failed; same-parent soups work.
+3. **Weight soups [11].** Three to six fine-tunes of the same parent, differing only by seed, are averaged in weight space,
+   then mixed 0.75 / 0.25 with the parent (a WiSE-FT-style hedge [12]). Independent-seed soups failed; same-parent soups work.
 
 ```python
 def soup(parent, finetunes, alpha=0.75):
@@ -421,8 +427,8 @@ __m256i s   = _mm256_madd_epi16(p, ones16);              /* widen to int32      
 
 Each of these was tested against a matched control, most on the full recipe:
 
-- **Architectures:** local attention, TCN, LRU / diagonal state-space, minGRU / minLSTM stacks, sLSTM, LayerNorm-LSTM,
-  CNNs on the book "image", event-clocked layers, memory cores, multi-head averaging, per-unit specialists. Every one led at
+- **Architectures:** local attention [13], TCN [14], LRU [15] / diagonal state-space, minGRU / minLSTM [16] stacks, sLSTM [17],
+  LayerNorm-LSTM [18], CNNs on the book "image" [19], event-clocked layers, memory cores, multi-head averaging, per-unit specialists. Every one led at
   epoch 0 and faded to a seed or worse by epochs 2-4 (see section 11 for why).
 - **Online learning,** in every form we tried: per-sequence recalibration from labels that become known later
   (once a label is causally known it carries nothing), weights carried across sequences (harmful at every learning rate).
@@ -451,7 +457,7 @@ Looking per unit instead of pooled explained the pattern:
   **+0.0011 / +0.0007**, reproduced on a second seed (+0.0013 / +0.0006).
 - Blends restricted to weights in [0, 1] missed that early checkpoints and the old teacher deserve **negative** weights. A
   nested (honest) per-unit committee with free weights reaches 0.6965 against 0.6946 for our best teacher.
-- A causal transformer teacher (8 layers, d=512, 2,000-row context) beat the big LSTM at every matched epoch on every unit
+- A causal transformer [13] teacher (8 layers, d=512, 2,000-row context) beat the big LSTM at every matched epoch on every unit
   (unit 3 +0.003 at epoch 3), but did not yet add to the teacher blend when we stopped it.
 
 ```python
@@ -468,6 +474,109 @@ def committee(sources, y, unit, fold):
                 out[te, k] = np.c_[[s[te, k] for s in sources].T, np.ones(te.sum())] @ b
     return out
 ```
+
+## 12. The second pipeline: GRU students and teacher labels
+
+Until the packages merged on 11-06, one of us ([@jy447](https://github.com/jy447)) ran a second pipeline: small GRUs [3], a
+"fusion" GRU that also reads hand-made streaming features, and teachers that are never shipped. It took the public score
+from 0.6479 to 0.6645. Every large step changed the labels, or fitted the model to the scored period:
+
+| Step | Public gain |
+|---|---:|
+| Fine-tune on the scored rows of the validation sequences | +0.007 |
+| Distillation: the student is fitted to the average of causal teachers [8] | +0.003 |
+| Two structures in the package (fusion + GRU) | +0.002 |
+| A 50-row look-ahead teacher [9] at half the teacher weight | +0.0012 |
+
+- **Loss.** The minimiser of the MSE weighted by `|clip(y)|` is, up to an affine map, the function that maximises the
+  weighted correlation. It beat plain MSE by 0.017.
+- **Why the validation fine-tune is the largest lever.** It fixes two mismatches at once: the scored rows are a selected,
+  easier subset, and validation comes from a later period than train. 70 % of its gain sits in the output layer, but the
+  rest needs the recurrent weights: LoRA [20] and LwF [21] style fine-tunes lost 0.0003-0.0022 against a full fine-tune.
+- **Cross-fitted labels.** The teacher in the `0.2 · y + 0.8 · teacher` label of sections 5 and 6 is a look-ahead teacher
+  fine-tuned on four of five validation folds, labelling the fifth. No sequence is labelled by a model that saw its own
+  targets. A label built from the package's own out-of-fold predictions gained +0.0038 on the gate and lost 0.0006 on the
+  board.
+
+## 13. Measuring small gains: the bench audit and transfer
+
+- **Write the expectation down first.** Before each upload we recorded the expected public change and its SD. Across 44
+  such uploads, single changes measured on the deployed models matched the board 12 times out of 12 (mean |error|
+  0.0001). Changes that remove or replace a member always came in lower (mean −0.00075): a bench can price the removed
+  part only through a weaker stand-in.
+- **Never score a package's own members on validation.** A jointly trained member has seen it: X scored +0.027 above its
+  train-only twin on validation, and the same on train.
+- **Transfer is below 1.** Moving a fine-tune along its task vector [22], `θ = parent + a · (fine-tune − parent)`, gained
+  +0.00028 out of fold at `a = 1.3` for the units 0-2 blend. On the board it scored −0.00006. That puts the transfer from
+  the validation period to the public period at about 0.87: some 13 % of what a fine-tune learns from validation does not
+  carry over, enough to cancel changes of +0.0002.
+
+## 14. Where the limit is
+
+- **Units 0-2 are saturated.** The members' errors correlate 0.981-0.993, so 97-99 % of each member's error is shared, and
+  no existing model adds anything as a fifth member. What still paid was refitting tsall and G0 on the units they serve.
+  They had been fine-tuned on all four units, with unit 3 carrying about half of the loss weight. The refit gained +0.00009
+  out of fold and +0.0002 on the board.
+- **Unit 3 lacks the side, not the size.** On out-of-fold predictions, perfect knowledge of whether the price moves adds
+  +0.069; perfect knowledge of the side adds +0.435. The unknown is whether `F` lands beyond a quote (30 % of unit 3's
+  scored rows, 65 % of its metric weight). Causal inputs separate it at AUC 0.68, a 50-row look-ahead teacher at 0.71, and
+  how far beyond it lands, no model sees.
+- **The decoded book is already inside the model.** Level-1 imbalance from the depth decoder correlates 0.39 with the
+  realised direction, but 0.82 with the model's own predicted direction. Features built from it add nothing (−0.00006).
+- **Mirror training is undecided.** A session-held-out check put mirror fine-tunes at about −0.002 on unit 3. The public
+  board leaned the other way in five paired readings (+0.00001 to +0.00025, each inside the noise).
+
+## 15. Why most attempts failed: seven causes
+
+Every direction in section 10 that did not move the score falls under one of seven causes:
+
+1. **The missing part is the coming tick change, and the past is already used.** Run backwards in time, a model scores
+   0.99; no past quantity correlates with its error above 0.03.
+2. **More capacity and longer training fit noise and the training period.** 2 × 512 lost 0.0025 after the fine-tune;
+   without an EMA of the weights [23], validation peaks at epoch 3.5-4.
+3. **The fine-tune already does it.** Validation data mixed into pre-training: +0.0036 before the fine-tune, −0.001 after.
+4. **The period shift cannot be removed from the inputs.** One row tells train from validation at AUC 0.92;
+   per-sequence summaries at 0.98.
+5. **The model is calibrated, and its per-sequence error does not persist.** Affine slopes are 0.98-1.06; a sequence's
+   first half predicts its second half's error at −0.07 to +0.10.
+6. **More data, or other data, is not what is missing.** A quarter of the training set scores the same as all of it.
+7. **The bench, not the method.** Small-recipe wins vanish in the full recipe, and leaky labels win the gate and lose the
+   board.
+
+## 16. Final selection and where the score came from
+
+- **Final selection** (one API call, final): our three best public submissions. 0.669382 (unit 3 at equal weights),
+  0.669378 (tsall and G0 refitted on units 0-2), and 0.669244 (a faster int8 build, 2,560 s: the most margin before the
+  watchdog if the rescoring hosts are slow).
+- **Where the +0.0215 came from** (0.6479 → 0.66938), attributing each board step to what it changed (approximate; the
+  steps overlap): fine-tuning on the validation period about 45 %, labels about 33 %, combining models about 20 %, better
+  base models about 4 %.
+
+## References
+
+1. R. J. Williams, J. Peng. An efficient gradient-based algorithm for on-line training of recurrent network trajectories. *Neural Computation*, 1990.
+2. S. Hochreiter, J. Schmidhuber. Long short-term memory. *Neural Computation*, 1997.
+3. K. Cho et al. Learning phrase representations using RNN encoder-decoder for statistical machine translation. *EMNLP*, 2014.
+4. P. Foret, A. Kleiner, H. Mobahi, B. Neyshabur. Sharpness-aware minimization for efficiently improving generalization. *ICLR*, 2021.
+5. Y. Gorishniy, I. Rubachev, A. Babenko. On embeddings for numerical features in tabular deep learning. *NeurIPS*, 2022.
+6. H. Sak, A. Senior, F. Beaufays. Long short-term memory recurrent neural network architectures for large scale acoustic modeling. *Interspeech*, 2014.
+7. N. Passalis, A. Tefas, J. Kanniainen, M. Gabbouj, A. Iosifidis. Deep adaptive input normalization for time series forecasting. *IEEE TNNLS*, 2020.
+8. G. Hinton, O. Vinyals, J. Dean. Distilling the knowledge in a neural network. arXiv:1503.02531, 2015.
+9. D. Lopez-Paz, L. Bottou, B. Schölkopf, V. Vapnik. Unifying distillation and privileged information. *ICLR*, 2016.
+10. I. Loshchilov, F. Hutter. SGDR: Stochastic gradient descent with warm restarts. *ICLR*, 2017.
+11. M. Wortsman et al. Model soups: averaging weights of multiple fine-tuned models improves accuracy without increasing inference time. *ICML*, 2022.
+12. M. Wortsman et al. Robust fine-tuning of zero-shot models. *CVPR*, 2022.
+13. A. Vaswani et al. Attention is all you need. *NeurIPS*, 2017.
+14. S. Bai, J. Z. Kolter, V. Koltun. An empirical evaluation of generic convolutional and recurrent networks for sequence modeling. arXiv:1803.01271, 2018.
+15. A. Orvieto et al. Resurrecting recurrent neural networks for long sequences. *ICML*, 2023.
+16. L. Feng, F. Tung, M. O. Ahmed, Y. Bengio, H. Hajimirsadeghi. Were RNNs all we needed? arXiv:2410.01201, 2024.
+17. M. Beck et al. xLSTM: Extended long short-term memory. *NeurIPS*, 2024.
+18. J. L. Ba, J. R. Kiros, G. E. Hinton. Layer normalization. arXiv:1607.06450, 2016.
+19. Z. Zhang, S. Zohren, S. Roberts. DeepLOB: Deep convolutional neural networks for limit order books. *IEEE Transactions on Signal Processing*, 2019.
+20. E. J. Hu et al. LoRA: Low-rank adaptation of large language models. *ICLR*, 2022.
+21. Z. Li, D. Hoiem. Learning without forgetting. *ECCV*, 2016.
+22. G. Ilharco et al. Editing models with task arithmetic. *ICLR*, 2023.
+23. B. T. Polyak, A. B. Juditsky. Acceleration of stochastic approximation by averaging. *SIAM Journal on Control and Optimization*, 1992.
 
 ---
 

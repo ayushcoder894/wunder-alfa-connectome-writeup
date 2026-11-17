@@ -498,6 +498,28 @@ from 0.6479 to 0.6645. Every large step changed the labels, or fitted the model 
   targets. A label built from the package's own out-of-fold predictions gained +0.0038 on the gate and lost 0.0006 on the
   board.
 
+```python
+def wmse(pred, target, y, rows):
+    """MSE weighted by the metric's own weights |clip(y)|: its minimiser maximises the weighted Pearson."""
+    w = y.clamp(-2, 2).abs() * rows
+    return (w * (pred - target.clamp(-2, 2)) ** 2).sum() / w.sum()
+
+# Fine-tune on validation: soft target, scored rows weight 1, unscored rows 0.1 (weights still from the true y).
+target = 0.2 * y.clamp(-2, 2) + 0.8 * q.clamp(-2, 2)          # q: the cross-fitted teacher label below
+rows = scored.float() + 0.1 * (~scored).float()
+loss = wmse(model(x), target, y, rows)
+
+def cross_fitted_labels(teacher_parent, valid_seqs, fold, n_folds=5):
+    """q for every validation sequence, from a look-ahead teacher that never saw that sequence's targets."""
+    q = {}
+    for k in range(n_folds):
+        t_k = finetune(teacher_parent, [s for s in valid_seqs if fold[s] != k])   # adapted to the period, blind to fold k
+        for s in valid_seqs:
+            if fold[s] == k:
+                q[s] = predict(t_k, s)                     # reads up to 50 rows ahead of each row
+    return q
+```
+
 ## 13. Measuring small gains: the bench audit and transfer
 
 - **Write the expectation down first.** Before each upload we recorded the expected public change and its SD. Across 44
@@ -510,6 +532,19 @@ from 0.6479 to 0.6645. Every large step changed the labels, or fitted the model 
   +0.00028 out of fold at `a = 1.3` for the units 0-2 blend. On the board it scored −0.00006. That puts the transfer from
   the validation period to the public period at about 0.87: some 13 % of what a fine-tune learns from validation does not
   carry over, enough to cancel changes of +0.0002.
+
+```python
+def dose(parent, finetuned, a):
+    """theta = parent + a * (fine-tune - parent). a = 1 is the fine-tune itself; no training."""
+    return {k: p + a * (finetuned[k] - p) if p.is_floating_point() else p for k, p in parent.items()}
+
+# Out of fold, relative to the parent: gain(a) = V*a - (N/2)*a^2 with V = 0.0091, N = 0.0071, best a = V/N = 1.28.
+# The board keeps a share s of the useful part V; the noise part N stays: gain_board(a) = s*V*a - (N/2)*a^2.
+# One upload at a = 1.3 read -0.00006 against a = 1, which fixes s:
+V, N = 0.0091, 0.0071
+s = (-0.00006 + N / 2 * (1.3 ** 2 - 1)) / (V * 0.3)       # 0.87
+best_board_a = s * V / N                                 # 1.12: worth +0.00005 over a = 1
+```
 
 ## 14. Where the limit is
 
@@ -525,6 +560,38 @@ from 0.6479 to 0.6645. Every large step changed the labels, or fitted the model 
   realised direction, but 0.82 with the model's own predicted direction. Features built from it add nothing (−0.00006).
 - **Mirror training is undecided.** A session-held-out check put mirror fine-tunes at about −0.002 on unit 3. The public
   board leaned the other way in five paired readings (+0.00001 to +0.00025, each inside the noise).
+
+The two checks behind the first two points, as sketches (out-of-fold predictions, the metric's `|y|` weights):
+
+```python
+def private_error_share(P, y):
+    """P: [rows, members] predictions. Per member, the share of its error variance that the other members do not
+    share: the only part averaging can remove. Units 0-2: 0.011-0.016 for the LSTMs, 0.029-0.031 for the GRU."""
+    w = np.abs(y) / np.abs(y).sum()
+    Pd, yd = P - w @ P, y - w @ y
+    E = yd[:, None] - Pd * ((w @ (Pd * yd[:, None])) / (w @ Pd ** 2))   # error after each member's own scale
+    C = (E * w[:, None]).T @ E                                         # weighted error covariance
+    share = []
+    for m in range(P.shape[1]):
+        o = [k for k in range(P.shape[1]) if k != m]
+        share.append(1 - C[o, m] @ np.linalg.solve(C[np.ix_(o, o)], C[o, m]) / C[m, m])
+    return np.array(share)
+
+def oracle_remap(p, y, fold, extra=None, bins=40):
+    """Cross-fitted remap: (prediction bin, optional TRUE attribute) -> |y|-weighted mean of y. An oracle attribute
+    only locates the missing information. Unit 3: extra = 'F lands beyond a quote' +0.069; extra = 'F above or
+    below the mid' +0.435."""
+    cell = np.digitize(p, np.quantile(p, np.linspace(0, 1, bins + 1)[1:-1]))
+    if extra is not None:
+        cell = cell * 2 + extra                             # extra in {0, 1}, read from the true label
+    out, w = np.empty_like(p), np.abs(y)
+    for k in np.unique(fold):
+        tr, te = fold != k, fold == k
+        num = np.bincount(cell[tr], w[tr] * y[tr], minlength=cell.max() + 1)
+        den = np.bincount(cell[tr], w[tr], minlength=cell.max() + 1)
+        out[te] = (num / np.maximum(den, 1e-12))[cell[te]]
+    return out
+```
 
 ## 15. Why most attempts failed: seven causes
 

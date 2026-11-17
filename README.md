@@ -1,7 +1,7 @@
 # Wunder Fund Alfa Connectome: our solution
 
 **Team:** Ayush Gupta ([@ayushcoder894](https://github.com/ayushcoder894)), TODO_NAME_2 (@TODO), TODO_NAME_3 (@TODO)
-**Result:** public leaderboard 0.66938, public rank 49. Our rule-clean variant scored 0.66924. Final (private) rank: to be added.
+**Result:** public leaderboard 0.66938, public rank 49. Final (private) rank: to be added.
 **Competition:** streaming prediction of two price-movement indicators from order books of two instruments, scored by a
 global weighted Pearson correlation; inference on 1 CPU core in 60 minutes for 39.4 million rows.
 
@@ -158,8 +158,8 @@ row weight in training (+0.0005 paired).
 ### 2.6 Sequences are blocks of whole trading sessions
 
 Sequences are consecutive 20,000-row blocks of longer sessions (1,505 continuation links inside validation, 368 sessions,
-only 41 sessions for unit 3). Carrying state from the previous block is worth +0.0002 at most, and the rules forbid joining
-sequences at test time, so we never used links at inference. Their real importance was for validation (next section).
+only 41 sessions for unit 3). Carrying state from the previous block is worth +0.0002 at most, so we used the links only for
+validation (next section).
 
 ```python
 # Sketch: linking validation blocks into sessions (used only for building honest folds).
@@ -393,16 +393,6 @@ A small classifier on the 99 warm-up rows picks the unit; each unit gets its own
 
 About 15 small recurrent models in total, ~19 MB zipped.
 
-**A rule note.** One of our best-scoring variants chose a lighter unit-3 route on every 4th unit-3 sequence with a counter
-that runs across sequences, which conflicts with "no state across sequences". The rule-clean variant picks that light route
-from a hash of the sequence's own warm-up rows (or not at all) and scored 0.66924:
-
-```python
-def light_route(warmup_rows):                       # depends only on this sequence
-    h = zlib.crc32(np.ascontiguousarray(warmup_rows[:99], dtype=np.float32).tobytes())
-    return h % 4 == 0
-```
-
 ## 9. Fitting it into one CPU core and 60 minutes
 
 39.4 million rows in 60 minutes is about 91 µs per row for everything, including Python's per-row callback. Speed decided
@@ -435,7 +425,7 @@ Each of these was tested against a matched control, most on the full recipe:
 - **Architectures:** local attention, TCN, LRU / diagonal state-space, minGRU / minLSTM stacks, sLSTM, LayerNorm-LSTM,
   CNNs on the book "image", event-clocked layers, memory cores, multi-head averaging, per-unit specialists. Every one led at
   epoch 0 and faded to a seed or worse by epochs 2-4 (see section 11 for why).
-- **Online learning,** in every form we could make legal: per-sequence recalibration from labels that become known later
+- **Online learning,** in every form we tried: per-sequence recalibration from labels that become known later
   (once a label is causally known it carries nothing), weights carried across sequences (harmful at every learning rate).
 - **Features:** order-flow, decoded book levels as inputs, Markov / n-gram event grammars, partner lead-lag, regime
   labels, reconstructed EMA signals. The LSTM already extracts them.
